@@ -72,8 +72,10 @@ PREFIX = 'prefix'
 SUFFIX = 'suffix'
 EXT = 'ext'
 
-TIME_KEYS = frozenset(('updated_parsed', 'date_parsed', 'published_parsed'))
-
+TIME_KEYS = ('updated_parsed', 'date_parsed', 'published_parsed')
+# entry key which will be added and used to compare date (got the values
+# of the first available keys of TIME_KEYS)
+CT = '__date' 
 
 CONFIG_FILE_EXAMPLE = """
 #-------------------------------------------------#
@@ -121,7 +123,7 @@ def _format_title(entry, cfg, section):
 
 
 def check_time_attr (entry):
-    if set(entry.keys()) & TIME_KEYS:
+    if set(entry.keys()) & set(TIME_KEYS):
         return True
     logging.info("Can't save %s (no date fields)." % entry.link)
     return False
@@ -161,16 +163,8 @@ def get_info(feed_url):
     return feedparser.parse(feed_url).entries
 
 
-def get_time_attr (entry):
-    for k in TIME_KEYS:
-        if k in entry:
-            return entry[k]
-
-
-def is_old (entry, last_time):
-    for k in TIME_KEYS:
-        if k in entry:
-            return getattr(entry,k) <= last_time
+def is_new (entry, last_time):
+    return entry[CT] > last_time
 
 
 def read_config(file):
@@ -183,8 +177,13 @@ def read_config(file):
 def retrieve_news(entries, last_struct_time=time.gmtime(0)):
     """Yelds new feeds entry."""
     entries = filter(check_time_attr, entries)
-    for e in sorted(entries, key=get_time_attr, reverse=True):
-        if not is_old(e, last_struct_time):
+    for e in entries:
+        for k in TIME_KEYS:
+            if k in e:
+                setattr(e, CT, e[k])
+                break
+    for e in sorted(entries, key=op.attrgetter(CT), reverse=True):
+        if is_new(e, last_struct_time):
             yield e
 
 
