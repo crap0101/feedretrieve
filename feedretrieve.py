@@ -123,7 +123,7 @@ def _format_title(entry, cfg, section):
 def check_time_attr (entry):
     if set(entry.keys()) & TIME_KEYS:
         return True
-    logging.info("Can't save %s (no date fields)." % entry.url)
+    logging.info("Can't save %s (no date fields)." % entry.link)
     return False
 
 
@@ -201,7 +201,7 @@ def run(config_file, format_title_func):
         if entries:
             logging.debug('start retrive pages from {0}'.format(section))
             for e in entries:
-                save(e.links[0].href, cfg.get(section, SAVE_PATH),
+                save(e.link, cfg.get(section, SAVE_PATH),
                      format_title_func(e, cfg, section))
             write_config(config_file, section,
                          [(LAST_UPDATE,
