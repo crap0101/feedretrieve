@@ -158,12 +158,37 @@ def read_config(file):
     return config
 
 
+def check_time_attr (entry):
+    keys = ('updated_parsed', 'published_parsed') #, 'published')
+    for k in keys:
+        if hasattr(entry, k):
+            return True
+    else:
+        logging.info("Can't save %s" % entry.title)
+        return False
+
+def get_time_attr (entry): #XXX+TODO
+    keys = ('updated_parsed', 'published_parsed') #, 'published')
+    for k in keys:
+        if hasattr(entry, k):
+            return getattr(entry, k)
+
+def is_old (e, last_time):
+    keys = ('updated_parsed', 'published_parsed') #, 'published')
+    for k in keys:
+        try:
+            return getattr(e,k) <= last_time
+        except AttributeError:
+            pass
+    raise AttributeError("Can't get feed time.")
+
+
 def retrieve_new(entries, last_struct_time=time.gmtime(0)):
     """Yelds new feeds entry."""
-    for e in sorted(entries, key=op.attrgetter('updated_parsed'), reverse=True):
-        if e.updated_parsed <= last_struct_time:
-            continue
-        yield e
+    entries = filter(check_time_attr, entries)
+    for e in sorted(entries, key=get_time_attr, reverse=True):  #XXX+TODO
+        if not is_old(e, last_struct_time):
+            yield e
 
 
 def run(config_file, format_title_func):
