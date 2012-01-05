@@ -72,6 +72,9 @@ PREFIX = 'prefix'
 SUFFIX = 'suffix'
 EXT = 'ext'
 
+TIME_KEYS = frozenset(('updated_parsed', 'date_parsed', 'published_parsed'))
+
+
 CONFIG_FILE_EXAMPLE = """
 #-------------------------------------------------#
 # example of config file.
@@ -117,6 +120,13 @@ def _format_title(entry, cfg, section):
              date.tm_mon, date.tm_mday, ext))
 
 
+def check_time_attr (entry):
+    if set(entry.keys()) & TIME_KEYS:
+        return True
+    logging.info("Can't save %s (no date fields)." % entry.url)
+    return False
+
+
 def get_arg_parser():
     """Command line parser."""
     parser = argparse.ArgumentParser(
@@ -151,6 +161,18 @@ def get_info(feed_url):
     return feedparser.parse(feed_url).entries
 
 
+def get_time_attr (entry):
+    for k in TIME_KEYS:
+        if k in entry:
+            return entry[k]
+
+
+def is_old (entry, last_time):
+    for k in TIME_KEYS:
+        if k in entry:
+            return getattr(entry,k) <= last_time
+
+
 def read_config(file):
     """Returns a ConfigParser object from *file*."""
     config = configparser.ConfigParser()
@@ -158,35 +180,10 @@ def read_config(file):
     return config
 
 
-def check_time_attr (entry):
-    keys = ('updated_parsed', 'published_parsed') #, 'published')
-    for k in keys:
-        if hasattr(entry, k):
-            return True
-    else:
-        logging.info("Can't save %s" % entry.title)
-        return False
-
-def get_time_attr (entry): #XXX+TODO
-    keys = ('updated_parsed', 'published_parsed') #, 'published')
-    for k in keys:
-        if hasattr(entry, k):
-            return getattr(entry, k)
-
-def is_old (e, last_time):
-    keys = ('updated_parsed', 'published_parsed') #, 'published')
-    for k in keys:
-        try:
-            return getattr(e,k) <= last_time
-        except AttributeError:
-            pass
-    raise AttributeError("Can't get feed time.")
-
-
-def retrieve_new(entries, last_struct_time=time.gmtime(0)):
+def retrieve_news(entries, last_struct_time=time.gmtime(0)):
     """Yelds new feeds entry."""
     entries = filter(check_time_attr, entries)
-    for e in sorted(entries, key=get_time_attr, reverse=True):  #XXX+TODO
+    for e in sorted(entries, key=get_time_attr, reverse=True):
         if not is_old(e, last_struct_time):
             yield e
 
@@ -199,8 +196,8 @@ def run(config_file, format_title_func):
         if not info:
             continue
         entries = list(
-            retrieve_new(info,
-                         time_to_struct(float(cfg.get(section,LAST_UPDATE)))))
+            retrieve_news(info,
+                          time_to_struct(float(cfg.get(section,LAST_UPDATE)))))
         if entries:
             logging.debug('start retrive pages from {0}'.format(section))
             for e in entries:
