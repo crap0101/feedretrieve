@@ -176,11 +176,11 @@ def read_config(file):
 
 def retrieve_news(entries, last_struct_time=time.gmtime(0)):
     """Yelds new feeds entry."""
-    entries = filter(check_time_attr, entries)
+    entries = list(filter(check_time_attr, entries))
     for e in entries:
         for k in TIME_KEYS:
             if k in e:
-                setattr(e, CT, e[k])
+                e[CT] = e[k]
                 break
     for e in sorted(entries, key=op.attrgetter(CT), reverse=True):
         if is_new(e, last_struct_time):
