@@ -180,15 +180,16 @@ def get_arg_parser():
     parser.add_argument('-S', '--list-sections',
                         dest='list_sections', action='store_true',
                         help="list sections from the config file and exit")
-    parser.add_argument('-u', '--from-url',
-                        dest='from_urls', nargs='+', metavar='URL',
-                        help=("download feeds only for %(metavar)s (i.e."
-                              " doesn't check the config file). See the"
-                              " -d/--destination option for the places"
-                              " to which save files"))
-    parser.add_argument('-U', '--also-from-url',
-                        dest='also_from_urls', nargs='+', metavar='URL',
-                        help="like -u but read the config file too")
+    from_url = parser.add_mutually_exclusive_group()
+    from_url.add_argument('-u', '--from-url',
+                          dest='from_urls', nargs='+', metavar='URL',
+                          help=("download feeds only for %(metavar)s (i.e."
+                                " doesn't check the config file). See the"
+                                " -d/--destination option for the places"
+                                " to which save files"))
+    from_url.add_argument('-U', '--also-from-url',
+                          dest='also_from_urls', nargs='+', metavar='URL',
+                          help="like -u but read the config file too")
     return parser
 
 
