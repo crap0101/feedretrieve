@@ -44,8 +44,21 @@ elif sys.version_info[0] == 3:
 else:
     print("Unknow Python version: %s" % (sys.version_info,))
     sys.exit(1)
+try:
+    import importlib
+    import_module = importlib.import_module
+except:
+    import_module = __import__
 # non stdl:
 import feedparser
+try:
+    import magic
+    def filetype (path, size=512):
+        with open(path, 'rb') as f:
+            return magic.from_buffer(f.read(size))
+except ImportError:
+    def filetype (path, size=512):
+        return b'?'
 
 
 # strings substitutions, regex pattern : sub
@@ -66,7 +79,7 @@ PLUG_DIR = osp.join(osp.expanduser('~'), '.feedretrieve_plugins')
 
 FEED_URL = 'feed_url'
 SAVE_PATH = 'savepath'
-LAST_UPDATE= 'last_update_time'
+LAST_UPDATE = 'last_update_time'
 DELAY = 'delay'
 PREFIX = 'prefix'
 SUFFIX = 'suffix'
@@ -135,26 +148,34 @@ def get_arg_parser():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=PROG_INFO,
         epilog=CONFIG_FILE_EXAMPLE)
-    parser.add_argument('-c', '--config-file', metavar='FILEPATH',
-                        dest='cfg', default=CONFIG_FILE,
+    parser.add_argument('-c', '--config-file',
+                        dest='cfg', default=CONFIG_FILE, metavar='FILEPATH',
                         help='path to the the config file to read from.')
-    parser.add_argument('-f', '--format-func', dest='ffunc',
-                        metavar='module.func',
+    parser.add_argument('-f', '--format-func',
+                        dest='ffunc', metavar='module.func',
                         help=("Use the *module*'s function *func* from"
                               " the plugin dir (%s) for title's formatting."
                               " function signature must be: %s" %
                               (PLUG_DIR, _format_title.__doc__)))
-    parser.add_argument('-l', '--log-file', metavar='FILEPATH',
-                        dest='log', default=LOG_FILE,
+    parser.add_argument('-l', '--log-file',
+                        dest='log', metavar='FILEPATH', default=LOG_FILE,
                         help='path to the the log file to write on.')
-    parser.add_argument('-r', '--run-forever', dest='nonstop',
-                        action='store_true', help='loop forever.')
+    parser.add_argument('-r', '--run-forever',
+                        dest='nonstop', action='store_true',
+                        help='run forever.')
+    parser.add_argument('-s', '--sections',
+                        dest='sections', default=(), nargs='+',
+                        metavar='SECTIONS', help=('retrieve feeds only from'
+                        ' the given %(metavar)s from the config file.'))
+    parser.add_argument('-S', '--list-sections',
+                        dest='list_sections', action='store_true',
+                        help="list sections from the config file and exit.")
     return parser
 
 
 def get_format_func (path, module, func):
     sys.path.insert(0, path)
-    m = __import__(module)
+    m = import_module(module)
     return getattr(m, func)
 
 
@@ -175,7 +196,7 @@ def read_config(file):
 
 
 def retrieve_news(entries, last_struct_time=time.gmtime(0)):
-    """Yelds new feeds entry."""
+    """Yelds new feed entries."""
     entries = list(filter(check_time_attr, entries))
     for e in entries:
         for k in TIME_KEYS:
@@ -187,10 +208,15 @@ def retrieve_news(entries, last_struct_time=time.gmtime(0)):
             yield e
 
 
-def run(config_file, format_title_func):
-    """Start retrieving feeds rely upon the infos on *config_file*."""
+def run(config_file, format_title_func, sections=()):
+    """Retrieve feeds from each sections in config *config_file*.
+    section => a sequence of strings, cfg section's names.
+               If False, retrive all found sections.
+    """
     cfg = read_config(config_file)
-    for section in cfg.sections():
+    if not sections:
+        sections = list(cfg.sections())
+    for section in set(cfg.sections()).intersection(sections):
         info = get_info(cfg.get(section, FEED_URL))
         if not info:
             continue
@@ -219,10 +245,12 @@ def save(url, basepath, title):
         return
     with open(osp.join(basepath, title), 'wb') as news:
         try:
-            logging.debug('\tsaving {0}'.format(title.encode('utf-8')))
+            logging.debug('\tsaving {0} from {1}'.format(
+                title.encode('utf-8'), url.encode('utf-8')))
             data = urlreq.urlopen(url)
             news.write(data.read())
-            logging.debug('\tdone.')
+            logging.debug("{} filetype: {}".format(
+                    title, filetype(osp.join(basepath, title))))
         except (IOError, urlerr.URLError, urlerr.HTTPError) as err:
             logging.warning('* {0}: {1}'.format(err, url))
 
@@ -251,8 +279,10 @@ def write_config(file, section, pairs):
 
 
 
+########
 # MAIN #
-def main(config_file, log_file, always_run, format_func):
+########
+def main(config_file, log_file, always_run, format_func, sections):
     logging.basicConfig(format='%(levelname)s:%(message)s',
                         level=logging.DEBUG)
     logfile = logging.handlers.RotatingFileHandler(
@@ -261,24 +291,24 @@ def main(config_file, log_file, always_run, format_func):
     logging.getLogger().addHandler(logfile)
     if always_run:
         while True:
-            cfg = read_config(config_file)
+            cfg = read_config(config_file, sections)
             logging.info('start retrieving feeds {0}'.format(time.ctime()))
             run(config_file, format_func)
             delay = int(cfg['DEFAULT'].get(DELAY, 300))
             logging.info('sleep {0} (for {1} sec)'.format(time.ctime(), delay))
             time.sleep(delay)
     else:
-        run(config_file, format_func)
+        run(config_file, format_func, sections)
+
 
 if __name__ == '__main__':
     parser = get_arg_parser()
     args = parser.parse_args()
     if not os.path.exists(args.cfg):
         parser.error("Can't read from config file {0}".format(args.cfg))
-    try:
-        read_config(args.cfg)
-    except configparser.Error as err:
-        parser.error(str(err))
+    if args.list_sections:
+        print("\n".join(read_config(args.cfg).sections()))
+        sys.exit(0)
     if args.ffunc:
         module, func = args.ffunc.split('.')
         if not os.path.exists(os.path.join(PLUG_DIR, '%s.py' % module)):
@@ -286,4 +316,4 @@ if __name__ == '__main__':
         format_title = get_format_func(PLUG_DIR, module, func)
     else:
         format_title = _format_title
-    main(args.cfg, args.log, args.nonstop, format_title)
+    main(args.cfg, args.log, args.nonstop, format_title, args.sections)
