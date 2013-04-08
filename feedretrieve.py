@@ -138,7 +138,7 @@ def _format_title(entry, cfg, section):
 def check_time_attr (entry):
     if set(entry.keys()) & set(TIME_KEYS):
         return True
-    logging.info("Can't save %s (no date fields)." % entry.link)
+    logging.warning("Can't save %s (no date fields)." % entry.link)
     return False
 
 
@@ -150,7 +150,12 @@ def get_arg_parser():
         epilog=CONFIG_FILE_EXAMPLE)
     parser.add_argument('-c', '--config-file',
                         dest='cfg', default=CONFIG_FILE, metavar='FILEPATH',
-                        help='path to the the config file to read from.')
+                        help='path to the the config file to read from')
+    parser.add_argument('-d', '--destination',
+                        dest='dest', default='', metavar='PATH',
+                        help=("set %(metavar)s to the directory for the"
+                              " files downloaded with the -u/-U options"
+                              " (must exists, default to the current dir)"))
     parser.add_argument('-f', '--format-func',
                         dest='ffunc', metavar='module.func',
                         help=("Use the *module*'s function *func* from"
@@ -159,17 +164,31 @@ def get_arg_parser():
                               (PLUG_DIR, _format_title.__doc__)))
     parser.add_argument('-l', '--log-file',
                         dest='log', metavar='FILEPATH', default=LOG_FILE,
-                        help='path to the the log file to write on.')
+                        help='path to the the log file to write on')
+    parser.add_argument('-L', '--loglevel',
+                        dest='loglevel', metavar='LEVEL', default='INFO',
+                        choices=('DEBUG', 'INFO', 'WARNING', 'ERROR'),
+                        help=('set the log level. %(metavar)s can be one'
+                              ' of %(choices)s. Default: %(default)s'))
     parser.add_argument('-r', '--run-forever',
                         dest='nonstop', action='store_true',
                         help='run forever.')
     parser.add_argument('-s', '--sections',
                         dest='sections', default=(), nargs='+',
                         metavar='SECTIONS', help=('retrieve feeds only from'
-                        ' the given %(metavar)s from the config file.'))
+                        ' the given %(metavar)s from the config file'))
     parser.add_argument('-S', '--list-sections',
                         dest='list_sections', action='store_true',
-                        help="list sections from the config file and exit.")
+                        help="list sections from the config file and exit")
+    parser.add_argument('-u', '--from-url',
+                        dest='from_urls', nargs='+', metavar='URL',
+                        help=("download feeds only for %(metavar)s (i.e."
+                              " doesn't check the config file). See the"
+                              " -d/--destination option for the places"
+                              " to which save files"))
+    parser.add_argument('-U', '--also-from-url',
+                        dest='also_from_urls', nargs='+', metavar='URL',
+                        help="like -u but read the config file too")
     return parser
 
 
@@ -224,8 +243,11 @@ def run(config_file, format_title_func, sections=()):
             retrieve_news(info,
                           time_to_struct(float(cfg.get(section,LAST_UPDATE)))))
         if entries:
-            logging.debug('start retrive pages from {0}'.format(section))
+            logging.info('start retrive pages from {0}'.format(section))
             for e in entries:
+                logging.info('saving {title} [{type}]'.format(
+                        title=e.title,
+                        type=e.links[0].type))
                 save(e.link, cfg.get(section, SAVE_PATH),
                      format_title_func(e, cfg, section))
             write_config(config_file, section,
@@ -241,19 +263,28 @@ def save(url, basepath, title):
     """
     if osp.exists(osp.join(basepath, title)):
         logging.info('* alredy saved: {0}'.format(
-            osp.join(basepath.encode('utf-8'), title.encode('utf-8'))))
+            osp.join(basepath, title)))
         return
-    with open(osp.join(basepath, title), 'wb') as news:
+    dest = osp.join(basepath, title)
+    with open(dest, 'wb') as news:
         try:
-            logging.debug('\tsaving {0} from {1}'.format(
-                title.encode('utf-8'), url.encode('utf-8')))
             data = urlreq.urlopen(url)
             news.write(data.read())
-            logging.debug("{} filetype: {}".format(
-                    title, filetype(osp.join(basepath, title))))
+            logging.debug("Saved file: {} [{}]".format(
+                    dest, filetype(dest).decode('utf-8')))
         except (IOError, urlerr.URLError, urlerr.HTTPError) as err:
-            logging.warning('* {0}: {1}'.format(err, url))
+            logging.error('** {0}: {1}'.format(err, url))
 
+
+def save_from_urls (urls, dest):
+    for url in urls:
+        logging.info('start retrive pages from {0}'.format(url))
+        entries = get_info(url)
+        for e in entries:
+            logging.info('saving {title} [{type}]'.format(
+                    title=e.title,
+                    type=e.links[0].type))
+            save(e.link, dest, e.title)
 
 def struct_to_time(struct_time):
     """Convert *struct_time* to calendar.timegm."""
@@ -283,8 +314,6 @@ def write_config(file, section, pairs):
 # MAIN #
 ########
 def main(config_file, log_file, always_run, format_func, sections):
-    logging.basicConfig(format='%(levelname)s:%(message)s',
-                        level=logging.DEBUG)
     logfile = logging.handlers.RotatingFileHandler(
         log_file, maxBytes=5000, backupCount=3)
     logfile.setFormatter(logging.Formatter('%(levelname)s:%(message)s'))
@@ -292,18 +321,26 @@ def main(config_file, log_file, always_run, format_func, sections):
     if always_run:
         while True:
             cfg = read_config(config_file, sections)
-            logging.info('start retrieving feeds {0}'.format(time.ctime()))
+            logging.info('{} start retrieving feeds'.format(time.ctime()))
             run(config_file, format_func)
             delay = int(cfg['DEFAULT'].get(DELAY, 300))
-            logging.info('sleep {0} (for {1} sec)'.format(time.ctime(), delay))
+            logging.info('{} sleeping for {} sec'.format(time.ctime(), delay))
             time.sleep(delay)
     else:
         run(config_file, format_func, sections)
 
 
+
 if __name__ == '__main__':
     parser = get_arg_parser()
     args = parser.parse_args()
+    logging.basicConfig(format='%(levelname)s:%(message)s',
+                        level=args.loglevel)
+    if args.from_urls:
+        save_from_urls(args.from_urls, args.dest or os.getcwd())
+        sys.exit(0)
+    if args.also_from_urls:
+        save_from_urls(args.also_from_urls, args.dest or os.getcwd())
     if not os.path.exists(args.cfg):
         parser.error("Can't read from config file {0}".format(args.cfg))
     if args.list_sections:
