@@ -4,10 +4,12 @@
 from __future__ import print_function
 
 
-PROG_INFO = """
-# feedretrieve.py - Retrieve feeds. (version 0.4.3 - 2012-01-05)
+_VERSION = '0.4.4'
+_DATE = '2013-04-11'
+_PROG_INFO = """
+# feedretrieve.py - Retrieve feeds. (version {version} - {date})
 
-# Copyright (C) 2011 Marco Chieppa (aka crap0101)
+# Copyright (C) 2011..2013 Marco Chieppa (aka crap0101)
 
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -21,7 +23,8 @@ PROG_INFO = """
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not see <http://www.gnu.org/licenses/>   
-"""
+""".format(version=_VERSION, date=_DATE)
+
 
 import os
 import os.path as osp
@@ -33,14 +36,24 @@ import operator as op
 import argparse
 import logging
 import logging.handlers
-if sys.version_info[0] == 2:
+if sys.version_info.major == 2:
     import ConfigParser as configparser
     import urllib as urlreq
     import urllib2 as urlerr
-elif sys.version_info[0] == 3:
+    class CustomURLopener(urlreq.FancyURLopener):
+        pass
+    def set_headers(headers):
+        opener = CustomURLopener()
+        add_headers(opener, headers)
+        urlreq._urlopener = opener
+elif sys.version_info.major == 3:
     import configparser
     import urllib.request as urlreq
     import urllib.error as urlerr
+    def set_headers(headers):
+        opener = urlreq.build_opener()
+        add_headers(opener, headers)
+        urlreq.install_opener(opener)
 else:
     print("Unknow Python version: %s" % (sys.version_info,))
     sys.exit(1)
@@ -77,6 +90,9 @@ LOG_FILE = osp.join(osp.expanduser('~'), '.feedretrieve.log')
 PLUG_DIR = osp.join(osp.expanduser('~'), '.feedretrieve_plugins')
 
 
+_DEFAULT_UA = 'feedretrieve.py/{}'.format(_VERSION)
+_DEFAULT_DELAY = 0
+
 FEED_URL = 'feed_url'
 SAVE_PATH = 'savepath'
 LAST_UPDATE = 'last_update_time'
@@ -84,6 +100,7 @@ DELAY = 'delay'
 PREFIX = 'prefix'
 SUFFIX = 'suffix'
 EXT = 'ext'
+USER_AGENT = 'user_agent'
 
 TIME_KEYS = ('updated_parsed', 'date_parsed', 'published_parsed')
 # entry key which will be added and used to compare date (got the values
@@ -101,6 +118,7 @@ delay = 3600
 prefix = 
 suffix = 
 ext = html
+user_agent = {user_agent}
 
 [uaar]
 savepath = /home/crap0101/feeds/uaarnews/
@@ -112,7 +130,7 @@ savepath = /home/crap0101/feeds/comidad/
 feed_url = http://www.comidad.org/dblog/feedrss.asp
 last_update_time = 1301529687  # after some time
 prefix = xxx_
-"""
+""".format(user_agent=_DEFAULT_UA)
 
 
 #default function for filename's string substitutions
@@ -135,6 +153,12 @@ def _format_title(entry, cfg, section):
              date.tm_mon, date.tm_mday, ext))
 
 
+def add_headers(opener, headers):
+    old = dict(opener.addheaders)
+    old.update(headers)
+    opener.addheaders = list(old.items())
+
+
 def check_time_attr (entry):
     if set(entry.keys()) & set(TIME_KEYS):
         return True
@@ -146,11 +170,12 @@ def get_arg_parser():
     """Command line parser."""
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        description=PROG_INFO,
+        description=_PROG_INFO,
         epilog=CONFIG_FILE_EXAMPLE)
     parser.add_argument('-c', '--config-file',
                         dest='cfg', default=CONFIG_FILE, metavar='FILEPATH',
-                        help='path to the the config file to read from')
+                        help=('path to the the config file to read from,'
+                              ' default to %(default)s'))
     parser.add_argument('-d', '--destination',
                         dest='dest', default='', metavar='PATH',
                         help=("set %(metavar)s to the directory for the"
@@ -180,6 +205,12 @@ def get_arg_parser():
     parser.add_argument('-S', '--list-sections',
                         dest='list_sections', action='store_true',
                         help="list sections from the config file and exit")
+    parser.add_argument('--user-agent',
+                        dest='user_agent', default='', metavar='UA',
+                        help=('set the user agent to %(metavar)s, otherwise'
+                              ' read the user_agent value from the config file'
+                              ' (if present) or fall back to the default'
+                              ' one: {}'.format(_DEFAULT_UA)))
     from_url = parser.add_mutually_exclusive_group()
     from_url.add_argument('-u', '--from-url',
                           dest='from_urls', nargs='+', metavar='URL',
@@ -269,6 +300,7 @@ def save(url, basepath, title):
     dest = osp.join(basepath, title)
     with open(dest, 'wb') as news:
         try:
+            logging.debug("from url {}".format(url))
             data = urlreq.urlopen(url)
             news.write(data.read())
             logging.debug("Saved file: {} [{}]".format(
@@ -321,20 +353,27 @@ def main(config_file, log_file, always_run, format_func, sections):
     logging.getLogger().addHandler(logfile)
     if always_run:
         while True:
-            cfg = read_config(config_file, sections)
+            cfg = read_config(config_file)
             logging.info('{} start retrieving feeds'.format(time.ctime()))
             run(config_file, format_func)
-            delay = int(cfg['DEFAULT'].get(DELAY, 300))
+            delay = int(cfg.defaults().get(DELAY, _DEFAULT_DELAY)
+                        or _DEFAULT_DELAY)
             logging.info('{} sleeping for {} sec'.format(time.ctime(), delay))
             time.sleep(delay)
     else:
         run(config_file, format_func, sections)
 
 
-
 if __name__ == '__main__':
     parser = get_arg_parser()
     args = parser.parse_args()
+
+    config_file = read_config(args.cfg)
+    user_agent = args.user_agent or (
+        config_file.defaults().get(USER_AGENT, _DEFAULT_UA)
+        or _DEFAULT_UA)
+    set_headers({'User-agent':user_agent})
+
     logging.basicConfig(format='%(levelname)s:%(message)s',
                         level=args.loglevel)
     if args.from_urls:
@@ -345,7 +384,7 @@ if __name__ == '__main__':
     if not os.path.exists(args.cfg):
         parser.error("Can't read from config file {0}".format(args.cfg))
     if args.list_sections:
-        print("\n".join(read_config(args.cfg).sections()))
+        print("\n".join(read_config(config_file).sections()))
         sys.exit(0)
     if args.ffunc:
         module, func = args.ffunc.split('.')
