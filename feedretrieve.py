@@ -25,6 +25,12 @@ _PROG_INFO = """
 # along with this program; if not see <http://www.gnu.org/licenses/>   
 """.format(version=_VERSION, date=_DATE)
 
+"""
+TODO:
+  * add recovery managment
+  * see #TODOs in the code
+"""
+
 
 import os
 import os.path as osp
@@ -86,6 +92,8 @@ else:
 # default paths & constants
 CONFIG_FILE = osp.join(osp.expanduser('~'), '.feedretrieve.cfg')
 LOG_FILE = osp.join(osp.expanduser('~'), '.feedretrieve.log')
+RECOVERY_FILE = osp.join(osp.expanduser('~'), '.feedretrieve.failed')
+
 # plug-in directory, actually only for title formatting
 PLUG_DIR = osp.join(osp.expanduser('~'), '.feedretrieve_plugins')
 
@@ -131,6 +139,11 @@ feed_url = http://www.comidad.org/dblog/feedrss.asp
 last_update_time = 1301529687  # after some time
 prefix = xxx_
 """.format(user_agent=_DEFAULT_UA)
+
+
+
+class SaveError (Exception):
+    pass
 
 
 #default function for filename's string substitutions
@@ -246,6 +259,15 @@ def read_config(file):
     return config
 
 
+def read_recovery(file):
+    to_rec = []
+    with open(file, 'rb') as f:
+        for k, g in it.groupby(f, lambda x: not x.strip()):
+            group = list(g)
+            if ''.join(group).strip():
+                to_rect.append(group)
+    return to_rec
+            
 def retrieve_news(entries, last_struct_time=time.gmtime(0)):
     """Yelds new feed entries."""
     entries = list(filter(check_time_attr, entries))
@@ -280,8 +302,15 @@ def run(config_file, format_title_func, sections=()):
                 logging.info('saving {title} [{type}]'.format(
                         title=e.title,
                         type=e.links[0].type))
-                save(e.link, cfg.get(section, SAVE_PATH),
-                     format_title_func(e, cfg, section))
+                try:
+                    save(e.link,
+                         cfg.get(section, SAVE_PATH),
+                         format_title_func(e, cfg, section))
+                except SaveError as err:
+                    write_recovery_entry(RECOVERY_FILE, #TODO: can choose recovery path from the config file/cmdline 
+                                         e.link,
+                                         os.path.join(cfg.get(section, SAVE_PATH),
+                                                      format_title_func(e, cfg, section)))
             write_config(config_file, section,
                          [(LAST_UPDATE,
                            str(struct_to_time(
@@ -307,6 +336,13 @@ def save(url, basepath, title):
                     dest, filetype(dest).decode('utf-8')))
         except (IOError, urlerr.URLError, urlerr.HTTPError) as err:
             logging.error('** {0}: {1}'.format(err, url))
+            # if destination file has been opened but an error occours,
+            # remove the created (invalid or possibly empty) file
+            try:
+                os.remove(dest)
+            except OSError:
+                pass # no dest file was even created
+            raise SaveError(err)
 
 
 def save_from_urls (urls, dest):
@@ -317,7 +353,11 @@ def save_from_urls (urls, dest):
             logging.info('saving {title} [{type}]'.format(
                     title=e.title,
                     type=e.links[0].type))
-            save(e.link, dest, e.title)
+            try:
+                save(e.link, dest, e.title)
+            except SaveError as err:
+                pass #TODO: save in the recovery file?
+
 
 def struct_to_time(struct_time):
     """Convert *struct_time* to calendar.timegm."""
@@ -341,6 +381,9 @@ def write_config(file, section, pairs):
             config.set(section, key, str(value))
         config.write(config_file)
 
+def write_recovery_entry (recovery_path, url, destination):
+    with open(recovery_path, 'a+b') as rec:
+        rec.write("{}\n{}\n\n".format(url, destination))
 
 
 ########
