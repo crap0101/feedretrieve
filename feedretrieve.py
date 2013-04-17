@@ -4,6 +4,9 @@
 from __future__ import print_function
 
 
+##############
+# prog infos #
+##############
 _VERSION = '0.4.4'
 _DATE = '2013-04-11'
 _PROG_INFO = """
@@ -25,41 +28,24 @@ _PROG_INFO = """
 # along with this program; if not see <http://www.gnu.org/licenses/>   
 """.format(version=_VERSION, date=_DATE)
 
-"""
-TODO:
-  * add recovery managment
-  * see #TODOs in the code
-"""
 
-
-import os
-import os.path as osp
-import sys
-import re
-import time
-import calendar
-import operator as op
 import argparse
+import atexit
+import calendar
+import itertools
 import logging
 import logging.handlers
+import operator
+import os
+import re
+import sys
+import time
 if sys.version_info.major == 2:
     import ConfigParser as configparser
-    import urllib as urlreq
-    import urllib2 as urlerr
-    class CustomURLopener(urlreq.FancyURLopener):
-        pass
-    def set_headers(headers):
-        opener = CustomURLopener()
-        add_headers(opener, headers)
-        urlreq._urlopener = opener
+    import urllib2 as urlreq
 elif sys.version_info.major == 3:
     import configparser
     import urllib.request as urlreq
-    import urllib.error as urlerr
-    def set_headers(headers):
-        opener = urlreq.build_opener()
-        add_headers(opener, headers)
-        urlreq.install_opener(opener)
 else:
     print("Unknow Python version: %s" % (sys.version_info,))
     sys.exit(1)
@@ -68,9 +54,13 @@ try:
     import_module = importlib.import_module
 except:
     import_module = __import__
-# non stdl:
+
+####################
+# non stdl imports #
+####################
 import feedparser
 try:
+    # optional
     import magic
     def filetype (path, size=512):
         with open(path, 'rb') as f:
@@ -80,40 +70,45 @@ except ImportError:
         return b'?'
 
 
-# strings substitutions, regex pattern : sub
-if sys.version_info[0] == 2:
-    RE_SUBS = {unicode('[ ,/|:"‘’“”«″–′\']', 'utf-8'): '-',
-               unicode('[()]', 'utf-8'): '_', }
-else:
-    RE_SUBS = {'[ ,/|:"‘’“”«″–′\']': '-',
-               '[()]': '_', }
+#############################
+# default paths & constants #
+#############################
+class Config:
+    """Default configuration values.
+    Fields contains other attributes, mostly used for
+    accessing the configuration file's fields.
+    """
+    config_file = os.path.join(os.path.expanduser('~'), '.feedretrieve.cfg')
+    log_file = os.path.join(os.path.expanduser('~'), '.feedretrieve.log')
+    recovery_file = os.path.join(os.path.expanduser('~'), '.feedretrieve.failed')
+    # plug-in directory, actually only for title formatting
+    plugin_path = os.path.join(os.path.expanduser('~'), '.feedretrieve_plugins')
+    user_agent = 'feedretrieve.py/{}'.format(_VERSION)
+    delay = 0
+    timeout = 0 # use default timeout
+    # strings substitutions, regex pattern : sub #
+    if sys.version_info.major == 2:
+        re_subs = {unicode('[ ,/|:"‘’“”«″–′\']', 'utf-8'): '-',
+                   unicode('[()]', 'utf-8'): '_', }
+    else:
+        re_subs = {'[ ,/|:"‘’“”«″–′\']': '-',
+                   '[()]': '_', }
+    class Fields:
+        feed_url = 'feed_url'
+        save_path = 'savepath'
+        last_update = 'last_update_time'
+        delay = 'delay'
+        prefix = 'prefix'
+        suffix = 'suffix'
+        ext = 'ext'
+        timeout = 'timeout'
+        user_agent = 'user_agent'
+        recovery_file = 'recovery_file'
+        time_keys = ('updated_parsed', 'date_parsed', 'published_parsed')
+        # entry key which will be added and used to compare date (got the values
+        # of the first available keys of time_keys)
+        compare_time = '__date'
 
-
-# default paths & constants
-CONFIG_FILE = osp.join(osp.expanduser('~'), '.feedretrieve.cfg')
-LOG_FILE = osp.join(osp.expanduser('~'), '.feedretrieve.log')
-RECOVERY_FILE = osp.join(osp.expanduser('~'), '.feedretrieve.failed')
-
-# plug-in directory, actually only for title formatting
-PLUG_DIR = osp.join(osp.expanduser('~'), '.feedretrieve_plugins')
-
-
-_DEFAULT_UA = 'feedretrieve.py/{}'.format(_VERSION)
-_DEFAULT_DELAY = 0
-
-FEED_URL = 'feed_url'
-SAVE_PATH = 'savepath'
-LAST_UPDATE = 'last_update_time'
-DELAY = 'delay'
-PREFIX = 'prefix'
-SUFFIX = 'suffix'
-EXT = 'ext'
-USER_AGENT = 'user_agent'
-
-TIME_KEYS = ('updated_parsed', 'date_parsed', 'published_parsed')
-# entry key which will be added and used to compare date (got the values
-# of the first available keys of TIME_KEYS)
-CT = '__date' 
 
 CONFIG_FILE_EXAMPLE = """
 #-------------------------------------------------#
@@ -126,7 +121,9 @@ delay = 3600
 prefix = 
 suffix = 
 ext = html
+timeout = 
 user_agent = {user_agent}
+recovery_file = {rec_file}
 
 [uaar]
 savepath = /home/crap0101/feeds/uaarnews/
@@ -138,45 +135,82 @@ savepath = /home/crap0101/feeds/comidad/
 feed_url = http://www.comidad.org/dblog/feedrss.asp
 last_update_time = 1301529687  # after some time
 prefix = xxx_
-""".format(user_agent=_DEFAULT_UA)
 
+""".format(user_agent=Config.user_agent,
+           rec_file=Config.recovery_file)
 
+RECOVERY_FILE_EXAMPLE = """
+#------------------------#
+# recovery file example:
+#------------------------#
+
+url-1
+destination-path-1
+
+url-2
+destination-path-2
+
+"""
 
 class SaveError (Exception):
+    """Exception on saving"""
     pass
 
-
-#default function for filename's string substitutions
-def _format_title(entry, cfg, section):
+def positive_integer (arg):
+    """Function for the -t/--timeout argument.
+    Returns the converted arg or Raise
+    argparse.ArgumentTypeError.
     """
+    value = int(arg)
+    if value < 0:
+        raise argparse.ArgumentTypeError("Must be a positive integer")
+    return value
+
+#default function for filename's string formatting
+def _format_title(entry, section_items):
+    """
+    entry => FeedParserDict object,
+    section_items => mapping of key,value pairs from the
+                     config file section for this entry
     Returns the formatted title.
-    *entry* if a FeedParserDict object,
-    *cfg* a configparser.ConfigParser instance,
-    *section* is the section relative to *entry*.
     """
     title = entry.title
-    for pattern, sub in RE_SUBS.items():
+    for pattern, sub in Config.re_subs.items():
         title = re.sub(pattern, sub, title, re.U)
     date = entry.updated_parsed
-    prefix=cfg.get(section, PREFIX)
-    suffix=cfg.get(section, SUFFIX)
-    ext=cfg.get(section, EXT)
+    prefix = section_items[Config.Fields.prefix]
+    suffix = section_items[Config.Fields.suffix]
+    ext = section_items[Config.Fields.ext]
     return ("%s%s%s_%d%02d%02d.%s" %
             (prefix, title, suffix, date.tm_year,
              date.tm_mon, date.tm_mday, ext))
 
+@atexit.register
+def _atexit_log():
+    """Log when exit"""
+    logging.info('{} exit at {}'.format(sys.argv[0], time.ctime())) 
 
 def add_headers(opener, headers):
+    """Add headers to the default opener."""
     old = dict(opener.addheaders)
     old.update(headers)
     opener.addheaders = list(old.items())
 
 
-def check_time_attr (entry):
-    if set(entry.keys()) & set(TIME_KEYS):
-        return True
-    logging.warning("Can't save %s (no date fields)." % entry.link)
-    return False
+def feeds_from_urls (urls, dest, timeout=None):
+    for url in urls:
+        logging.info('start retrive pages from {}'.format(url))
+        entries = get_entries(url)
+        if not entries:
+            logging.info('no entries from {}'.format(url))
+        for e in entries:
+            logging.info('saving {title} [{type}]'.format(
+                    title=e.title,
+                    type=e.links[0].type))
+            try:
+                save(e.link, os.path.join(dest, e.title), timeout)
+            except SaveError as err:
+                pass
 
 
 def get_arg_parser():
@@ -184,53 +218,68 @@ def get_arg_parser():
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=_PROG_INFO,
-        epilog=CONFIG_FILE_EXAMPLE)
+        epilog='\n'.join((CONFIG_FILE_EXAMPLE,RECOVERY_FILE_EXAMPLE)))
     parser.add_argument('-c', '--config-file',
-                        dest='cfg', default=CONFIG_FILE, metavar='FILEPATH',
-                        help=('path to the the config file to read from,'
-                              ' default to %(default)s'))
+                        dest='cfg', default=Config.config_file, metavar='FILEPATH',
+                        help='''path to the the config file to read from,
+                              default to %(default)s''')
     parser.add_argument('-d', '--destination',
                         dest='dest', default='', metavar='PATH',
-                        help=("set %(metavar)s to the directory for the"
-                              " files downloaded with the -u/-U options"
-                              " (must exists, default to the current dir)"))
+                        help='''set %(metavar)s to the directory for the
+                               files downloaded with the -u/-U options
+                               (must exists, default to the current dir)''')
     parser.add_argument('-f', '--format-func',
                         dest='ffunc', metavar='module.func',
-                        help=("Use the *module*'s function *func* from"
-                              " the plugin dir (%s) for title's formatting."
-                              " function signature must be: %s" %
-                              (PLUG_DIR, _format_title.__doc__)))
+                        help='''"Use the module's function func from the plugin
+                             dir (%s) for title's formatting. Arguments passed
+                             to custom functions are a FeedParserDict object and
+                             a mapping of key,value configuration items from
+                             the relative section. The function must returns
+                             the formatted title'''.format(Config.plugin_path))
     parser.add_argument('-l', '--log-file',
-                        dest='log', metavar='FILEPATH', default=LOG_FILE,
+                        dest='log', metavar='FILEPATH', default=Config.log_file,
                         help='path to the the log file to write on')
     parser.add_argument('-L', '--loglevel',
                         dest='loglevel', metavar='LEVEL', default='INFO',
                         choices=('DEBUG', 'INFO', 'WARNING', 'ERROR'),
-                        help=('set the log level. %(metavar)s can be one'
-                              ' of %(choices)s. Default: %(default)s'))
+                        help='''set the log level. %(metavar)s can be one
+                              of %(choices)s. Default: %(default)s''')
     parser.add_argument('-r', '--run-forever',
                         dest='nonstop', action='store_true',
                         help='run forever.')
+    parser.add_argument('-R', '--recovery-file',
+                        dest='recovery_file', default='',
+                        help='''read and write recovery informations 
+                             from/to this file (usually use the config file
+                             value recovery_file, if present, otherwise
+                             fall back to the default one: %s).
+                             '''.format(Config.recovery_file))
     parser.add_argument('-s', '--sections',
                         dest='sections', default=(), nargs='+',
-                        metavar='SECTIONS', help=('retrieve feeds only from'
-                        ' the given %(metavar)s from the config file'))
+                        metavar='SECTIONS', help='''retrieve feeds only from
+                        the given %(metavar)s from the config file''')
     parser.add_argument('-S', '--list-sections',
                         dest='list_sections', action='store_true',
                         help="list sections from the config file and exit")
+    parser.add_argument('-t', '--timeout',
+                        dest='timeout', default=0, type=positive_integer,
+                        help='''set the timeout, must be a positive integer.
+                             Zero means to use the default timeout''')
     parser.add_argument('--user-agent',
                         dest='user_agent', default='', metavar='UA',
-                        help=('set the user agent to %(metavar)s, otherwise'
-                              ' read the user_agent value from the config file'
-                              ' (if present) or fall back to the default'
-                              ' one: {}'.format(_DEFAULT_UA)))
+                        help='''set the user agent to %(metavar)s, otherwise
+                             read the user_agent value from the config file
+                             (if present) or fall back to the default
+                             one: {}'''.format(Config.user_agent))
     from_url = parser.add_mutually_exclusive_group()
     from_url.add_argument('-u', '--from-url',
                           dest='from_urls', nargs='+', metavar='URL',
-                          help=("download feeds only for %(metavar)s (i.e."
-                                " doesn't check the config file). See the"
-                                " -d/--destination option for the places"
-                                " to which save files"))
+                          help='''download feeds only for %(metavar)s (i.e.
+                                 doesn't check the config file). See the
+                                 -d/--destination option for the places
+                                 to which save files. NOTE: with the -u/-U
+                                 options are used, the given failed tries
+                                 will not be written in the recovery file''')
     from_url.add_argument('-U', '--also-from-url',
                           dest='also_from_urls', nargs='+', metavar='URL',
                           help="like -u but read the config file too")
@@ -238,50 +287,57 @@ def get_arg_parser():
 
 
 def get_format_func (path, module, func):
+    """Returns the attribute func from the module at path"""
     sys.path.insert(0, path)
     m = import_module(module)
     return getattr(m, func)
 
 
-def get_info(feed_url):
-    """Returns the entries from the url *feed_url*."""
-    return feedparser.parse(feed_url).entries
+def get_entries(url):
+    """Returns the entries from the given url."""
+    return feedparser.parse(url).entries
 
 
-def is_new (entry, last_time):
-    return entry[CT] > last_time
-
-
-def read_config(file):
-    """Returns a ConfigParser object from *file*."""
+def read_config(filepath):
+    """Returns a ConfigParser object from filepath."""
     config = configparser.ConfigParser()
-    config.read(file)
+    config.read(filepath)
     return config
 
 
-def read_recovery(file):
+def read_recovery(recfile):
+    """Returns a sequence of (url,path) pairs from recfile."""
     to_rec = []
-    with open(file, 'rb') as f:
-        for k, g in it.groupby(f, lambda x: not x.strip()):
+    with open(recfile, 'rb') as f:
+        for k, g in itertools.groupby(f, lambda x: not x.strip()):
             group = list(g)
             if ''.join(group).strip():
-                to_rect.append(group)
+                to_rec.append([x.strip() for x in group])
     return to_rec
-            
+
+
 def retrieve_news(entries, last_struct_time=time.gmtime(0)):
     """Yelds new feed entries."""
+    def check_time_attr (entry):
+        if set(entry.keys()) & set(Config.Fields.time_keys):
+            return True
+        logging.info("Can't save %s (no date fields)." % entry.link)
+        return False
+    def is_new (entry, last_time):
+        return entry[Config.Fields.compare_time] > last_time
     entries = list(filter(check_time_attr, entries))
     for e in entries:
-        for k in TIME_KEYS:
+        for k in Config.Fields.time_keys:
             if k in e:
-                e[CT] = e[k]
+                e[Config.Fields.compare_time] = e[k]
                 break
-    for e in sorted(entries, key=op.attrgetter(CT), reverse=True):
-        if is_new(e, last_struct_time):
-            yield e
+    gattr = operator.attrgetter(Config.Fields.compare_time)
+    for e in itertools.takewhile(lambda entry: is_new(e, last_struct_time),
+                                 sorted(entries, key=gattr, reverse=True)):
+        yield e
 
 
-def run(config_file, format_title_func, sections=()):
+def run(config_file, recfile, format_title_func, sections=(), timeout=None):
     """Retrieve feeds from each sections in config *config_file*.
     section => a sequence of strings, cfg section's names.
                If False, retrive all found sections.
@@ -290,52 +346,59 @@ def run(config_file, format_title_func, sections=()):
     if not sections:
         sections = list(cfg.sections())
     for section in set(cfg.sections()).intersection(sections):
-        info = get_info(cfg.get(section, FEED_URL))
+        url = cfg.get(section, Config.Fields.feed_url)
+        info = get_entries(url)
         if not info:
+            logging.info('no entries from {}'.format(url))
             continue
         entries = list(
             retrieve_news(info,
-                          time_to_struct(float(cfg.get(section,LAST_UPDATE)))))
+                          time_to_struct(float(cfg.get(section,Config.Fields.last_update)))))
         if entries:
-            logging.info('start retrive pages from {0}'.format(section))
+            logging.info('start retrive pages from {}'.format(section))
             for e in entries:
                 logging.info('saving {title} [{type}]'.format(
                         title=e.title,
                         type=e.links[0].type))
                 try:
                     save(e.link,
-                         cfg.get(section, SAVE_PATH),
-                         format_title_func(e, cfg, section))
+                         os.path.join(cfg.get(section, Config.Fields.save_path),
+                                      format_title_func(e, dict(cfg.items(section)))),
+                         timeout)
                 except SaveError as err:
-                    write_recovery_entry(RECOVERY_FILE, #TODO: can choose recovery path from the config file/cmdline 
+                    write_recovery_entry(recfile,
                                          e.link,
-                                         os.path.join(cfg.get(section, SAVE_PATH),
-                                                      format_title_func(e, cfg, section)))
+                                         os.path.join(cfg.get(section, Config.Fields.save_path),
+                                                      format_title_func(e, dict(cfg.items(section)))))
             write_config(config_file, section,
-                         [(LAST_UPDATE,
+                         [(Config.Fields.last_update,
                            str(struct_to_time(
                                max(e.updated_parsed for e in entries))))])
 
+def struct_to_time(struct_time):
+    """Convert *struct_time* to calendar.timegm."""
+    return calendar.timegm(struct_time)
 
-def save(url, basepath, title):
+
+def save(url, dest, timeout=None):
     """
     Save the content downloaded from *url* in the path *basepath*
     in a file named *title*.
+    optional timeout is the used as argument for urlopen (must be a
+    positive integer or None, which means to use the default timeout).
     """
-    if osp.exists(osp.join(basepath, title)):
-        logging.info('* alredy saved: {0}'.format(
-            osp.join(basepath, title)))
+    if os.path.exists(dest):
+        logging.info('* alredy saved: {}'.format(dest))
         return
-    dest = osp.join(basepath, title)
     with open(dest, 'wb') as news:
         try:
             logging.debug("from url {}".format(url))
-            data = urlreq.urlopen(url)
+            data = urlreq.urlopen(url, timeout=timeout)
             news.write(data.read())
             logging.debug("Saved file: {} [{}]".format(
                     dest, filetype(dest).decode('utf-8')))
-        except (IOError, urlerr.URLError, urlerr.HTTPError) as err:
-            logging.error('** {0}: {1}'.format(err, url))
+        except IOError as err:
+            logging.error('** {}: {}'.format(err, url))
             # if destination file has been opened but an error occours,
             # remove the created (invalid or possibly empty) file
             try:
@@ -345,23 +408,40 @@ def save(url, basepath, title):
             raise SaveError(err)
 
 
-def save_from_urls (urls, dest):
-    for url in urls:
-        logging.info('start retrive pages from {0}'.format(url))
-        entries = get_info(url)
-        for e in entries:
-            logging.info('saving {title} [{type}]'.format(
-                    title=e.title,
-                    type=e.links[0].type))
-            try:
-                save(e.link, dest, e.title)
-            except SaveError as err:
-                pass #TODO: save in the recovery file?
+def save_from_recovery (recfile, timeout=None):
+    """Save uris stored in the recovery file."""
+    if not os.path.exists(recfile):
+        logging.info("No recovery file found, skip...")
+        return
+    try:
+        data = read_recovery(recfile)
+        os.remove(recfile)
+    except IOError as e:
+        logging.info("Error while reading recovery file {}, skip...".format(e))
+        return
+    for url, path in data:
+        try:
+            save(url, path, timeout)
+        except SaveError as err:
+            write_recovery_entry(recfile, url, path)
 
 
-def struct_to_time(struct_time):
-    """Convert *struct_time* to calendar.timegm."""
-    return calendar.timegm(struct_time)
+def set_headers(headers):
+    opener = urlreq.build_opener()
+    add_headers(opener, headers)
+    urlreq.install_opener(opener)
+
+
+def set_logger (filepath, level):
+    """Set the logging system.
+    filepath => where to store the logging infos
+    level    => logging level.
+    """
+    logging.basicConfig(format='%(levelname)s:%(message)s', level=level)
+    logfile = logging.handlers.RotatingFileHandler(
+        filepath, maxBytes=5000, backupCount=3)
+    logfile.setFormatter(logging.Formatter('%(levelname)s:%(message)s'))
+    logging.getLogger().addHandler(logfile)
 
 
 def time_to_struct(seconds):
@@ -389,51 +469,61 @@ def write_recovery_entry (recovery_path, url, destination):
 ########
 # MAIN #
 ########
-def main(config_file, log_file, always_run, format_func, sections):
-    logfile = logging.handlers.RotatingFileHandler(
-        log_file, maxBytes=5000, backupCount=3)
-    logfile.setFormatter(logging.Formatter('%(levelname)s:%(message)s'))
-    logging.getLogger().addHandler(logfile)
+def main(config_file, recfile, always_run, format_func, sections, timeout=None):
+    cfg = read_config(config_file)
+    recfile = (recfile
+               or cfg.defaults().get(Config.Fields.recovery_file, Config.recovery_file)
+               or Config.recovery_file)
     if always_run:
         while True:
             cfg = read_config(config_file)
             logging.info('{} start retrieving feeds'.format(time.ctime()))
-            run(config_file, format_func)
-            delay = int(cfg.defaults().get(DELAY, _DEFAULT_DELAY)
-                        or _DEFAULT_DELAY)
+            run(config_file, recfile, format_func, sections, timeout)
+            delay = int(cfg.defaults().get(Config.Fields.delay, Config.delay)
+                        or Config.delay)
             logging.info('{} sleeping for {} sec'.format(time.ctime(), delay))
             time.sleep(delay)
     else:
-        run(config_file, format_func, sections)
+        run(config_file, recfile, format_func, sections, timeout)
 
 
 if __name__ == '__main__':
     parser = get_arg_parser()
     args = parser.parse_args()
 
-    config_file = read_config(args.cfg)
+    cfg = read_config(args.cfg)
     user_agent = args.user_agent or (
-        config_file.defaults().get(USER_AGENT, _DEFAULT_UA)
-        or _DEFAULT_UA)
+        cfg.defaults().get(Config.Fields.user_agent, Config.user_agent)
+        or Config.user_agent)
     set_headers({'User-agent':user_agent})
+    timeout = (args.timeout
+               or int(cfg.defaults().get(Config.Fields.timeout, Config.timeout)
+               or Config.timeout))
 
-    logging.basicConfig(format='%(levelname)s:%(message)s',
-                        level=args.loglevel)
+    set_logger(args.log, args.loglevel)
+    logging.info('{} start at {}'.format(sys.argv[0], time.ctime()))
+
+    if args.list_sections:
+        print("\n".join(cfg.sections()))
+        sys.exit(0)
+
+    recfile = (args.recovery_file
+               or cfg.defaults().get(Config.Fields.recovery_file, Config.recovery_file)
+               or Config.recovery_file)
+    save_from_recovery(recfile, timeout)
+
     if args.from_urls:
-        save_from_urls(args.from_urls, args.dest or os.getcwd())
+        feeds_from_urls(args.from_urls, args.dest or os.getcwd(), timeout)
         sys.exit(0)
     if args.also_from_urls:
-        save_from_urls(args.also_from_urls, args.dest or os.getcwd())
-    if not os.path.exists(args.cfg):
-        parser.error("Can't read from config file {0}".format(args.cfg))
-    if args.list_sections:
-        print("\n".join(read_config(config_file).sections()))
-        sys.exit(0)
+        feeds_from_urls(args.also_from_urls, args.dest or os.getcwd(), timeout)
     if args.ffunc:
         module, func = args.ffunc.split('.')
-        if not os.path.exists(os.path.join(PLUG_DIR, '%s.py' % module)):
-            parser.error("Can't load plugin: {0}".format(args.ffunc))
-        format_title = get_format_func(PLUG_DIR, module, func)
+        try:
+            format_title = get_format_func(Config.plugin_path, module, func)
+        except Exception as err:
+            logging.error(err)
+            parser.error("Can't load plugin {}: {}".format(args.ffunc, err))
     else:
         format_title = _format_title
-    main(args.cfg, args.log, args.nonstop, format_title, args.sections)
+    main(args.cfg, args.recovery_file, args.nonstop, format_title, args.sections, timeout)
