@@ -35,7 +35,6 @@ import calendar
 import itertools
 import logging
 import logging.handlers
-import operator
 import os
 import re
 import sys
@@ -121,7 +120,7 @@ delay = 3600
 prefix = 
 suffix = 
 ext = html
-timeout = 
+timeout = 60
 user_agent = {user_agent}
 recovery_file = {rec_file}
 
@@ -310,7 +309,7 @@ def read_recovery(recfile):
     to_rec = []
     with open(recfile, 'rb') as f:
         for k, g in itertools.groupby(f, lambda x: not x.strip()):
-            group = list(g)
+            group = list(x.decode("utf-8") for x in g)
             if ''.join(group).strip():
                 to_rec.append([x.strip() for x in group])
     return to_rec
@@ -331,10 +330,9 @@ def retrieve_news(entries, last_struct_time=time.gmtime(0)):
             if k in e:
                 e[Config.Fields.compare_time] = e[k]
                 break
-    gattr = operator.attrgetter(Config.Fields.compare_time)
-    for e in itertools.takewhile(lambda entry: is_new(e, last_struct_time),
-                                 sorted(entries, key=gattr, reverse=True)):
-        yield e
+    for e in entries:
+        if is_new(e, last_struct_time):
+            yield e
 
 
 def run(config_file, recfile, format_title_func, sections=(), timeout=None):
@@ -419,6 +417,7 @@ def save_from_recovery (recfile, timeout=None):
     except IOError as e:
         logging.info("Error while reading recovery file {}, skip...".format(e))
         return
+    logging.info("Start retrieve urls to be recovered...")
     for url, path in data:
         try:
             save(url, path, timeout)
@@ -463,7 +462,7 @@ def write_config(file, section, pairs):
 
 def write_recovery_entry (recovery_path, url, destination):
     with open(recovery_path, 'a+b') as rec:
-        rec.write("{}\n{}\n\n".format(url, destination))
+        rec.write("{}\n{}\n\n".format(url, destination).encode("utf-8"))
 
 
 ########
