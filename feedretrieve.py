@@ -84,7 +84,7 @@ class Config:
     plugin_path = os.path.join(os.path.expanduser('~'), '.feedretrieve_plugins')
     user_agent = 'feedretrieve.py/{}'.format(_VERSION)
     delay = 0
-    timeout = 0 # use default timeout
+    timeout = None # use default timeout
     # strings substitutions, regex pattern : sub #
     if sys.version_info.major == 2:
         re_subs = {unicode('[ ,/|:"‘’“”«″–′\']', 'utf-8'): '-',
@@ -120,7 +120,7 @@ delay = 3600
 prefix = 
 suffix = 
 ext = html
-timeout = 60
+timeout = 
 user_agent = {user_agent}
 recovery_file = {rec_file}
 
@@ -396,7 +396,7 @@ def save(url, dest, timeout=None):
             logging.debug("Saved file: {} [{}]".format(
                     dest, filetype(dest).decode('utf-8')))
         except IOError as err:
-            logging.error('** {}: {}'.format(err, url))
+            logging.error('in save() -- {}: {}'.format(err, url))
             # if destination file has been opened but an error occours,
             # remove the created (invalid or possibly empty) file
             try:
@@ -496,8 +496,8 @@ if __name__ == '__main__':
         or Config.user_agent)
     set_headers({'User-agent':user_agent})
     timeout = (args.timeout
-               or int(cfg.defaults().get(Config.Fields.timeout, Config.timeout)
-               or Config.timeout))
+               or int(cfg.defaults().get(Config.Fields.timeout, 0) or 0)
+               or Config.timeout)
 
     set_logger(args.log, args.loglevel)
     logging.info('{} start at {}'.format(sys.argv[0], time.ctime()))
