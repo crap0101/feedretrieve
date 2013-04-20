@@ -79,9 +79,11 @@ class Config:
     """
     config_file = os.path.join(os.path.expanduser('~'), '.feedretrieve.cfg')
     log_file = os.path.join(os.path.expanduser('~'), '.feedretrieve.log')
-    recovery_file = os.path.join(os.path.expanduser('~'), '.feedretrieve.failed')
+    recovery_file = os.path.join(os.path.expanduser('~'),
+                                 '.feedretrieve.failed')
     # plug-in directory, actually only for title formatting
-    plugin_path = os.path.join(os.path.expanduser('~'), '.feedretrieve_plugins')
+    plugin_path = os.path.join(os.path.expanduser('~'),
+                               '.feedretrieve_plugins')
     user_agent = 'feedretrieve.py/{}'.format(_VERSION)
     delay = 0
     timeout = None # use default timeout
@@ -104,8 +106,8 @@ class Config:
         user_agent = 'user_agent'
         recovery_file = 'recovery_file'
         time_keys = ('updated_parsed', 'date_parsed', 'published_parsed')
-        # entry key which will be added and used to compare date (got the values
-        # of the first available keys of time_keys)
+        # entry key which will be added and used to compare date (got
+        # the values of the first available keys of time_keys)
         compare_time = '__date'
 
 
@@ -190,7 +192,7 @@ def _atexit_log():
     logging.info('{} exit at {}'.format(sys.argv[0], time.ctime())) 
 
 def add_headers(opener, headers):
-    """Add headers to the default opener."""
+    """Add headers (a mapping) to opener."""
     old = dict(opener.addheaders)
     old.update(headers)
     opener.addheaders = list(old.items())
@@ -219,7 +221,7 @@ def get_arg_parser():
         description=_PROG_INFO,
         epilog='\n'.join((CONFIG_FILE_EXAMPLE,RECOVERY_FILE_EXAMPLE)))
     parser.add_argument('-c', '--config-file',
-                        dest='cfg', default=Config.config_file, metavar='FILEPATH',
+                        dest='cfg', default=Config.config_file, metavar='PATH',
                         help='''path to the the config file to read from,
                               default to %(default)s''')
     parser.add_argument('-d', '--destination',
@@ -230,13 +232,14 @@ def get_arg_parser():
     parser.add_argument('-f', '--format-func',
                         dest='ffunc', metavar='module.func',
                         help='''"Use the module's function func from the plugin
-                             dir (%s) for title's formatting. Arguments passed
-                             to custom functions are a FeedParserDict object and
-                             a mapping of key,value configuration items from
-                             the relative section. The function must returns
-                             the formatted title'''.format(Config.plugin_path))
+                        dir (%s) for title's formatting. Arguments passed to
+                        custom functions are a FeedParserDict object and a
+                        mapping of key,value configuration items from the
+                        relative section. The function must returns the
+                        formatted title'''.format(Config.plugin_path))
     parser.add_argument('-l', '--log-file',
-                        dest='log', metavar='FILEPATH', default=Config.log_file,
+                        dest='log', metavar='FILEPATH',
+                        default=Config.log_file,
                         help='path to the the log file to write on')
     parser.add_argument('-L', '--loglevel',
                         dest='loglevel', metavar='LEVEL', default='INFO',
@@ -304,24 +307,30 @@ def read_config(filepath):
     return config
 
 
-def read_recovery(recfile):
+def read_recovery(recfile_path):
     """Returns a sequence of (url,path) pairs from recfile."""
     to_rec = []
-    with open(recfile, 'rb') as f:
+    errors = []
+    with open(recfile_path, 'rb') as f:
         for k, g in itertools.groupby(f, lambda x: not x.strip()):
             group = list(x.decode("utf-8") for x in g)
             if ''.join(group).strip():
-                to_rec.append([x.strip() for x in group])
-    return to_rec
+                if len(group) != 2:
+                    logging.warning(
+                        "Skipping {}: Bad formatted entry".format(group))
+                    errors.append(group)
+                else:
+                    to_rec.append(tuple(x.strip() for x in group))
+    return to_rec, errors
 
 
 def retrieve_news(entries, last_struct_time=time.gmtime(0)):
     """Yelds new feed entries."""
     def check_time_attr (entry):
-        if set(entry.keys()) & set(Config.Fields.time_keys):
-            return True
-        logging.info("Can't save %s (no date fields)." % entry.link)
-        return False
+        if not set(entry.keys()) & set(Config.Fields.time_keys):
+            logging.info("Can't save %s (no date fields)." % entry.link)
+            return False
+        return True
     def is_new (entry, last_time):
         return entry[Config.Fields.compare_time] > last_time
     entries = list(filter(check_time_attr, entries))
@@ -349,9 +358,8 @@ def run(config_file, recfile, format_title_func, sections=(), timeout=None):
         if not info:
             logging.info('no entries from {}'.format(url))
             continue
-        entries = list(
-            retrieve_news(info,
-                          time_to_struct(float(cfg.get(section,Config.Fields.last_update)))))
+        entries = list(retrieve_news(info, time_to_struct(
+                    float(cfg.get(section,Config.Fields.last_update)))))
         if entries:
             logging.info('start retrive pages from {}'.format(section))
             for e in entries:
@@ -360,14 +368,16 @@ def run(config_file, recfile, format_title_func, sections=(), timeout=None):
                         type=e.links[0].type))
                 try:
                     save(e.link,
-                         os.path.join(cfg.get(section, Config.Fields.save_path),
-                                      format_title_func(e, dict(cfg.items(section)))),
+                         os.path.join(
+                            cfg.get(section, Config.Fields.save_path),
+                            format_title_func(e, dict(cfg.items(section)))),
                          timeout)
                 except SaveError as err:
                     write_recovery_entry(recfile,
                                          e.link,
-                                         os.path.join(cfg.get(section, Config.Fields.save_path),
-                                                      format_title_func(e, dict(cfg.items(section)))))
+                                         os.path.join(
+                            cfg.get(section, Config.Fields.save_path),
+                            format_title_func(e, dict(cfg.items(section)))))
             write_config(config_file, section,
                          [(Config.Fields.last_update,
                            str(struct_to_time(
@@ -412,7 +422,7 @@ def save_from_recovery (recfile, timeout=None):
         logging.info("No recovery file found, skip...")
         return
     try:
-        data = read_recovery(recfile)
+        data, errors = read_recovery(recfile) #TODO: wtf with errors?
         os.remove(recfile)
     except IOError as e:
         logging.info("Error while reading recovery file {}, skip...".format(e))
@@ -426,11 +436,14 @@ def save_from_recovery (recfile, timeout=None):
 
 
 def set_headers(headers):
+    """Set headers to the default opener."""
     opener = urlreq.build_opener()
+    opener.addheaders = []
     add_headers(opener, headers)
     urlreq.install_opener(opener)
 
 
+#TODO: add choice for maxBytes and backupCount
 def set_logger (filepath, level):
     """Set the logging system.
     filepath => where to store the logging infos
@@ -448,14 +461,13 @@ def time_to_struct(seconds):
     return time.gmtime(seconds)
 
 
-def write_config(file, section, pairs):
+def write_config(filepath, section, pairs):
     """
     Write new *section* configuration key-value from the
     sequence *pairs* on *file*.
     """
-    config = configparser.ConfigParser()
-    config.read(file)
-    with open(file, 'w') as config_file:
+    config = read_config(filepath)
+    with open(filepath, 'w') as config_file:
         for key, value in dict(pairs).items():
             config.set(section, key, str(value))
         config.write(config_file)
@@ -468,10 +480,12 @@ def write_recovery_entry (recovery_path, url, destination):
 ########
 # MAIN #
 ########
-def main(config_file, recfile, always_run, format_func, sections, timeout=None):
+def main(config_file, recfile, always_run,
+         format_func, sections, timeout=None):
     cfg = read_config(config_file)
     recfile = (recfile
-               or cfg.defaults().get(Config.Fields.recovery_file, Config.recovery_file)
+               or cfg.defaults().get(
+            Config.Fields.recovery_file, Config.recovery_file)
                or Config.recovery_file)
     if always_run:
         while True:
@@ -507,7 +521,8 @@ if __name__ == '__main__':
         sys.exit(0)
 
     recfile = (args.recovery_file
-               or cfg.defaults().get(Config.Fields.recovery_file, Config.recovery_file)
+               or cfg.defaults().get(
+            Config.Fields.recovery_file, Config.recovery_file)
                or Config.recovery_file)
     save_from_recovery(recfile, timeout)
 
@@ -525,4 +540,5 @@ if __name__ == '__main__':
             parser.error("Can't load plugin {}: {}".format(args.ffunc, err))
     else:
         format_title = _format_title
-    main(args.cfg, args.recovery_file, args.nonstop, format_title, args.sections, timeout)
+    main(args.cfg, args.recovery_file, args.nonstop,
+         format_title, args.sections, timeout)
