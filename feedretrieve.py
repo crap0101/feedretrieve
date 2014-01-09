@@ -276,12 +276,12 @@ def get_arg_parser():
     from_url = parser.add_mutually_exclusive_group()
     from_url.add_argument('-u', '--from-url',
                           dest='from_urls', nargs='+', metavar='URL',
-                          help='''download feeds only for %(metavar)s (i.e.
+                          help="""download feeds only for %(metavar)s (i.e.
                                  doesn't check the config file). See the
                                  -d/--destination option for the places
                                  to which save files. NOTE: with the -u/-U
                                  options are used, the given failed tries
-                                 will not be written in the recovery file''')
+                                 will not be written in the recovery file""")
     from_url.add_argument('-U', '--also-from-url',
                           dest='also_from_urls', nargs='+', metavar='URL',
                           help="like -u but read the config file too")
