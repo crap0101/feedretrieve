@@ -232,7 +232,7 @@ def get_arg_parser():
     parser.add_argument('-f', '--format-func',
                         dest='ffunc', metavar='module.func',
                         help='''"Use the module's function func from the plugin
-                        dir (%s) for title's formatting. Arguments passed to
+                        dir ({}) for title's formatting. Arguments passed to
                         custom functions are a FeedParserDict object and a
                         mapping of key,value configuration items from the
                         relative section. The function must returns the
@@ -254,7 +254,7 @@ def get_arg_parser():
                         help='''read and write recovery informations 
                              from/to this file (usually use the config file
                              value recovery_file, if present, otherwise
-                             fall back to the default one: %s).
+                             fall back to the default one: {}).
                              '''.format(Config.recovery_file))
     parser.add_argument('-s', '--sections',
                         dest='sections', default=(), nargs='+',
